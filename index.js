@@ -22,7 +22,6 @@ function evalMath(expr) {
 function parseMap(mapStr) {
     const map = {};
     if (!mapStr) return map;
-    // Divide por ; o , y extrae pares clave=valor
     const parts = mapStr.split(/[,;]/);
     for (let part of parts) {
         if (!part.trim()) continue;
@@ -138,26 +137,28 @@ function escapeToLuaString(s) {
 
 // Deobfuscador principal
 function deobfuscate(code) {
-    // 1. Extraer offset matemático de la función eh()
-    const offsetMatch = code.match(/local function eh\(m\)return Uh\[m\+\((\d+)-(\d+)\)\]end/);
-    if (!offsetMatch) throw new Error("No se encontró la función eh() para calcular el offset.");
-    const offset = parseInt(offsetMatch[1]) - parseInt(offsetMatch[2]);
+    // 1. Extraer offset matemático y nombre de función dinámicamente (tolerante a espacios)
+    const offsetMatch = code.match(/local\s+function\s+([a-zA-Z_]\w*)\s*\(\s*\w+\s*\)\s*return\s+Uh\s*\[\s*\w+\s*\+\s*\(([^)]+)\)\s*\]\s*end/);
+    if (!offsetMatch) throw new Error("No se encontró la función de desencriptación (eh).");
+    const funcName = offsetMatch[1];
+    const offset = evalMath(offsetMatch[2]);
+    if (offset === null) throw new Error("No se pudo calcular el offset matemático.");
 
     // 2. Extraer y parsear tablas K y W dinámicamente
-    const kMatch = code.match(/local K=\{(.*?)\}/);
-    const wMatch = code.match(/local W=\{(.*?)\}/);
+    const kMatch = code.match(/local\s+K\s*=\s*\{([\s\S]*?)\}/);
+    const wMatch = code.match(/local\s+W\s*=\s*\{([\s\S]*?)\}/);
     const K = kMatch ? { ...defaultK, ...parseMap(kMatch[1]) } : defaultK;
     const W = wMatch ? { ...defaultW, ...parseMap(wMatch[1]) } : defaultW;
 
-    // 3. Extraer array de strings Uh
-    const uhMatch = code.match(/local Uh=\{([\s\S]*?)\}local function eh/);
+    // 3. Extraer array de strings Uh (tolerante a espacios)
+    const uhMatch = code.match(/local\s+Uh\s*=\s*\{([\s\S]*?)\}\s*local\s+function/);
     if (!uhMatch) throw new Error("No se encontró la tabla de strings Uh.");
     
     const stringMatches = [...uhMatch[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)];
     let Uh = stringMatches.map(m => unescapeLuaString(m[1]));
 
     // 4. Extraer y aplicar intercambios (swaps)
-    const swapMatch = code.match(/for m,d in ipairs\(\{(\{\{[^}]+\};\{[^}]+\};\{[^}]+\}\})\}\)do/);
+    const swapMatch = code.match(/for\s+\w+,\w+\s+in\s+ipairs\(\{(.+?)\}\)\s*do/);
     if (swapMatch) {
         let swapStr = swapMatch[1].replace(/\{/g, '[').replace(/\}/g, ']').replace(/;/g, ',');
         try {
@@ -165,7 +166,7 @@ function deobfuscate(code) {
             for (const pair of swaps) {
                 let i1 = evalMath(pair[0]);
                 let i2 = evalMath(pair[1]);
-                if (i1 && i2) {
+                if (i1 !== null && i2 !== null) {
                     [Uh[i1 - 1], Uh[i2 - 1]] = [Uh[i2 - 1], Uh[i1 - 1]];
                 }
             }
@@ -180,13 +181,14 @@ function deobfuscate(code) {
         return s;
     });
 
-    // 6. Reemplazar llamadas eh(...) en el código
+    // 6. Reemplazar llamadas a la función de desencriptación en el código
     let result = '';
     let i = 0;
+    const funcCall = funcName + '(';
     while (i < code.length) {
-        if (code.startsWith('eh(', i)) {
+        if (code.startsWith(funcCall, i)) {
             let depth = 1;
-            let start = i + 3;
+            let start = i + funcCall.length;
             let end = start;
             while (end < code.length && depth > 0) {
                 if (code[end] === '(') depth++;
@@ -211,10 +213,10 @@ function deobfuscate(code) {
     }
 
     // 7. Limpieza: Eliminar la basura del ofuscador para que el código quede limpio
-    result = result.replace(/local Uh=\{[\s\S]*?\}local function eh.*?end end end do/g, '');
-    result = result.replace(/local K=\{.*?\}/g, '');
-    result = result.replace(/local W=\{.*?\}/g, '');
-    result = result.replace(/local p=string\.len.*?end end end end end end/g, '');
+    result = result.replace(/local\s+Uh\s*=\s*\{[\s\S]*?\}\s*local\s+function.*?end\s+end\s+end\s+do/g, '');
+    result = result.replace(/local\s+K\s*=\s*\{.*?\}/g, '');
+    result = result.replace(/local\s+W\s*=\s*\{.*?\}/g, '');
+    result = result.replace(/local\s+p\s*=\s*string\.len.*?end\s+end\s+end\s+end\s+end\s+end/g, '');
 
     return result;
 }
