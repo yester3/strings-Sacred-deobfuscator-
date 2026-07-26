@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, SlashCommandBuilder, AttachmentBuilder, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, AttachmentBuilder, REST, Routes, Events } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -237,7 +237,7 @@ const commands = [
                 .setRequired(true))
 ].map(command => command.toJSON());
 
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
     console.log(`Bot conectado como ${client.user.tag}`);
     
     // Registrar comandos slash usando el ID del bot
@@ -254,7 +254,7 @@ client.once('ready', async () => {
     }
 });
 
-client.on('interactionCreate', async interaction => {
+client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === 'decrypt') {
