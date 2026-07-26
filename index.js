@@ -237,20 +237,21 @@ const commands = [
                 .setRequired(true))
 ].map(command => command.toJSON());
 
-const rest = new REST({ version: '10' }).setToken(token);
-
-(async () => {
+client.once('ready', async () => {
+    console.log(`Bot conectado como ${client.user.tag}`);
+    
+    // Registrar comandos slash usando el ID del bot
     try {
+        const rest = new REST({ version: '10' }).setToken(token);
         console.log('Registrando comandos slash globalmente...');
-        await rest.put(Routes.applicationCommands(), { body: commands });
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands }
+        );
         console.log('Comandos registrados exitosamente.');
     } catch (error) {
-        console.error(error);
+        console.error('Error al registrar los comandos:', error);
     }
-})();
-
-client.once('ready', () => {
-    console.log(`Bot conectado como ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async interaction => {
