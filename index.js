@@ -2,20 +2,73 @@ const { Client, GatewayIntentBits, SlashCommandBuilder, AttachmentBuilder, REST,
 const fs = require('fs');
 const path = require('path');
 
-// Tablas de encriptación Base84/Base64 extraídas estáticamente (fallback en caso de que el regex dinámico falle)
+// Tablas de encriptación Base84/Base64 extraídas estáticamente (fallback)
 const defaultK = {'N':18,')':59,'9':12,'g':2,']':49,'"':6,'V':22,'k':3,'&':43,'B':54,'a':37,'b':25,"'":33,'T':53,':':0,'?':61,'7':80,'(':65,'\\':9,'M':56,'A':44,'J':78,'`':71,'=':27,'Q':32,'-':64,'6':30,'H':39,'L':48,'c':20,'Z':24,'t':66,'_':51,'p':67,'#':79,'*':3,'F':7,'o':36,'X':16,'u':52,'O':46,'1':38,'I':41,'r':13,'C':77,'K':1,'e':55,'m':17,'s':35,'j':50,'+':74,'P':70,',':31,'4':10,'d':8,'Y':62,'i':29,'$':11,'G':63,'^':4,'%':21,'3':72,'W':76,'l':15,'.':42,'h':47,'[':45,'S':28,'E':26,'0':34,'f':75,';':81,'R':58,'@':69,'<':60,'/':84,'n':23,'5':82,'U':73,'!':40,'q':68,'D':19,'2':5,'>':14,'8':57};
 const defaultW = {'s':5,'q':19,'b':12,'G':33,'+':61,'H':63,'S':2,'M':4,'w':60,'T':45,'I':62,'1':30,'Q':31,'l':59,'o':40,'u':48,'X':0,'h':46,'i':18,'L':6,'J':13,'p':47,'Z':14,'O':3,'N':34,'x':54,'0':24,'R':51,'f':41,'6':16,'c':52,'r':57,'e':27,'7':17,'U':1,'a':9,'8':50,'D':58,'j':28,'2':29,'K':53,'4':36,'V':26,'A':20,'W':44,'y':42,'B':49,'/':32,'C':56,'9':22,'E':35,'n':25,'v':23,'5':55,'d':11,'Y':10,'t':7,'m':21,'k':8,'F':39,'P':43,'g':15,'3':38,'z':37};
 
 // Evaluador de expresiones matemáticas seguras
 function evalMath(expr) {
     if (!expr) return null;
-    const sanitized = expr.replace(/\s/g, '');
+    let sanitized = expr.replace(/\s/g, '');
     if (!/^[0-9+\-*/%().]+$/.test(sanitized)) return null;
+    // Previene errores de sintaxis en JS con dobles negativos
+    sanitized = sanitized.replace(/--/g, '- -');
     try {
         return Function('"use strict";return (' + sanitized + ')')();
     } catch {
         return null;
     }
+}
+
+// Desescapa strings de Lua a texto plano manualmente (evita fallos de JSON.parse)
+function unescapeLuaString(s) {
+    let res = '';
+    let i = 0;
+    while (i < s.length) {
+        if (s[i] === '\\' && i + 1 < s.length) {
+            let next = s[i + 1];
+            if (next === 'a') { res += '\u0007'; i += 2; }
+            else if (next === 'b') { res += '\b'; i += 2; }
+            else if (next === 'f') { res += '\f'; i += 2; }
+            else if (next === 'n') { res += '\n'; i += 2; }
+            else if (next === 'r') { res += '\r'; i += 2; }
+            else if (next === 't') { res += '\t'; i += 2; }
+            else if (next === 'v') { res += '\u000b'; i += 2; }
+            else if (next === '\\') { res += '\\'; i += 2; }
+            else if (next === '"') { res += '"'; i += 2; }
+            else if (next === "'") { res += "'"; i += 2; }
+            else if (next === '\n') { res += '\n'; i += 2; }
+            else if (/[0-9]/.test(next)) {
+                let numStr = next;
+                let j = i + 2;
+                while (j < s.length && /[0-9]/.test(s[j]) && numStr.length < 3) {
+                    numStr += s[j];
+                    j++;
+                }
+                res += String.fromCharCode(parseInt(numStr, 8));
+                i = j;
+            } else {
+                res += next;
+                i += 2;
+            }
+        } else {
+            res += s[i];
+            i++;
+        }
+    }
+    return res;
+}
+
+// Escapa texto plano a string de Lua válido
+function escapeToLuaString(s) {
+    if (typeof s !== 'string') s = String(s);
+    return '"' + s
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t')
+        + '"';
 }
 
 // Parsea las tablas K y W dinámicamente del script
@@ -27,7 +80,7 @@ function parseMap(mapStr) {
         if (!part.trim()) continue;
         let match = part.match(/^\[?"((?:[^"\\]|\\.)*)"\]?=(.*)$/);
         if (match) {
-            let key = match[1];
+            let key = unescapeLuaString(match[1]);
             let val = evalMath(match[2]);
             if (key.length === 1 && val !== null) map[key] = val;
         } else {
@@ -116,30 +169,11 @@ function decodeLT(s, W) {
     return Buffer.from(res).toString('latin1');
 }
 
-// Desescapa strings de Lua a texto plano
-function unescapeLuaString(s) {
-    let jsonStr = s
-        .replace(/\\'/g, "'")
-        .replace(/\\a/g, "\\u0007")
-        .replace(/\\v/g, "\\u000b")
-        .replace(/\\(\d{1,3})/g, (m, p1) => `\\u${parseInt(p1, 8).toString(16).padStart(4, '0')}`);
-    try {
-        return JSON.parse('"' + jsonStr + '"');
-    } catch {
-        return s;
-    }
-}
-
-// Escapa texto plano a string de Lua válido
-function escapeToLuaString(s) {
-    return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
-}
-
 // Deobfuscador principal
 function deobfuscate(code) {
-    // 1. Extraer offset matemático y nombre de función dinámicamente (tolerante a espacios)
-    const offsetMatch = code.match(/local\s+function\s+([a-zA-Z_]\w*)\s*\(\s*\w+\s*\)\s*return\s+Uh\s*\[\s*\w+\s*\+\s*\(([^)]+)\)\s*\]\s*end/);
-    if (!offsetMatch) throw new Error("No se encontró la función de desencriptación (eh).");
+    // 1. Extraer offset matemático y nombre de función dinámicamente
+    const offsetMatch = code.match(/local\s+function\s+([a-zA-Z_]\w*)\s*\(\s*\w+\s*\)\s*return\s+Uh\s*\[\s*\w+\s*\+\s*\(?\s*([^)\]]+)\s*\)?\s*\]\s*end/);
+    if (!offsetMatch) throw new Error("No se encontró la función de desencriptación.");
     const funcName = offsetMatch[1];
     const offset = evalMath(offsetMatch[2]);
     if (offset === null) throw new Error("No se pudo calcular el offset matemático.");
@@ -150,24 +184,27 @@ function deobfuscate(code) {
     const K = kMatch ? { ...defaultK, ...parseMap(kMatch[1]) } : defaultK;
     const W = wMatch ? { ...defaultW, ...parseMap(wMatch[1]) } : defaultW;
 
-    // 3. Extraer array de strings Uh (tolerante a espacios)
+    // 3. Extraer array de strings Uh
     const uhMatch = code.match(/local\s+Uh\s*=\s*\{([\s\S]*?)\}\s*local\s+function/);
     if (!uhMatch) throw new Error("No se encontró la tabla de strings Uh.");
     
     const stringMatches = [...uhMatch[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)];
     let Uh = stringMatches.map(m => unescapeLuaString(m[1]));
 
-    // 4. Extraer y aplicar intercambios (swaps)
-    const swapMatch = code.match(/for\s+\w+,\w+\s+in\s+ipairs\(\{(.+?)\}\)\s*do/);
+    // 4. Extraer y aplicar intercambios (swaps) simulando el bucle while exacto del ofuscador
+    const swapMatch = code.match(/ipairs\(\{(\{\{.*?\}\})\}\)/);
     if (swapMatch) {
         let swapStr = swapMatch[1].replace(/\{/g, '[').replace(/\}/g, ']').replace(/;/g, ',');
         try {
             const swaps = eval(swapStr);
             for (const pair of swaps) {
-                let i1 = evalMath(pair[0]);
-                let i2 = evalMath(pair[1]);
-                if (i1 !== null && i2 !== null) {
+                let i1 = pair[0];
+                let i2 = pair[1];
+                // El ofuscador usa un bucle while que invierte la sección
+                while (i1 < i2) {
                     [Uh[i1 - 1], Uh[i2 - 1]] = [Uh[i2 - 1], Uh[i1 - 1]];
+                    i1 += 1;
+                    i2 -= 1;
                 }
             }
         } catch(e) { console.error("Error en swaps:", e); }
@@ -242,7 +279,6 @@ const commands = [
 client.once(Events.ClientReady, async () => {
     console.log(`Bot conectado como ${client.user.tag}`);
     
-    // Registrar comandos slash usando el ID del bot
     try {
         const rest = new REST({ version: '10' }).setToken(token);
         console.log('Registrando comandos slash globalmente...');
@@ -288,7 +324,6 @@ client.on(Events.InteractionCreate, async interaction => {
                 files: [fileAttachment] 
             });
 
-            // Limpiar archivo temporal
             fs.unlinkSync(tempFilePath);
 
         } catch (error) {
